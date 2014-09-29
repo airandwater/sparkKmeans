@@ -194,8 +194,8 @@ def getCoresetStreaming(iterator,PBsum,tfactor):
     #Bc = [(b[0][0], b[0][1]) for b in iterator] #when dont keep track of keys
     #Bc = [b[1] for b in iterator]
     for b in iterator:
-    B = b[0]
-    m = b[1]
+        B = b[0]
+        m = b[1]
     Sind = []
     print((len(Bc[0]),len(B),len(m)))
     PBsum1 = PBsum.value
@@ -205,13 +205,13 @@ def getCoresetStreaming(iterator,PBsum,tfactor):
     #t = tfactor*c/PBsum #tfactor*Bc[0][1]/PBsum
     #m = [closestPoint(p,Bc[0])[1] for p in pts]
     #select
-    for it in len(PBsum)
+    for it in len(PBsum):
        q = weighted_pick(m)
        Sind.append(q)
     w = PBsum/(tfactor*m[sind])
     #for each coreset b, find the points whose cost match closetsPoint(p,b)
     #if P is passed in here, does all the memory get passed or only at evaluation?
-    Pind = [if closestPoint(p,b)==m[p]]
+    #Pind = [if closestPoint(p,b)==m[p]]
     #calculate the number closest, subtract the number of points that appear in S
     wts
     yield (Sind,wts)
@@ -264,7 +264,6 @@ if __name__ == "__main__":
 
     l2 = lines.repartition(n)
     data = l2.map(parseVector).cache()
-    P2 = data.mapPartitionsWithIndex(addi,preservesPartitioning=True)
     P = data
     #P.glom().collect() #to check the partitioning
     #B = P.mapPartitions(lambda x: getRandB(x,K),preservesPartitioning=True).cache()
@@ -358,12 +357,12 @@ if __name__ == "__main__":
 
     while tempDist > convergeDist:
         closest = data.map(
-            lambda p: (closestPoint(p, kPoints), (p, 1)))
+            lambda p: (closestPoint(p, kPoints)[0], (p, 1)))
         pointStats = closest.reduceByKey(
             lambda (x1, y1), (x2, y2): (x1 + x2, y1 + y2))
         newPoints = pointStats.map(
             lambda (x, (y, z)): (x, y / z)).collect()
-
+        
         tempDist = sum(np.sum((kPoints[x] - y) ** 2) for (x, y) in newPoints)
 
         for (x, y) in newPoints:
