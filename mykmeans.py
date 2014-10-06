@@ -30,6 +30,7 @@ from pyspark import SparkContext
 from pyspark import rdd
 from operator import add,concat
 from itertools import chain,imap
+import time
 
 
 def parseVector(line):
@@ -79,17 +80,15 @@ def weighted_pick(probs):
     #print "idx is " + str(idx)
     return idx
 
-def kmeansApprox(x,K,convergeDist):
-    kPoints = x.takeSample(False, K, 1)
+def kmeansApprox(xw,K,convergeDist):
+    kPoints = xw.map(lambda (k,w): k).takeSample(False, K, 1)
     tempDist = 1.0
-
     while tempDist > convergeDist:
-        closest = x.map(lambda p: (closestPoint(p, kPoints)[0], (p, 1)))
+        #closest = x.map(lambda p: (weightedClosestPoint(p, wt, kPoints)[0], (p, 1)))
+        closest = xw.map(lambda (p,w): (weightedClosestPoint(p, w, kPoints)[0], (p, 1)))
         pointStats = closest.reduceByKey(lambda (x1, y1), (x2, y2): (x1 + x2, y1 + y2))
         newPoints = pointStats.map(lambda (x, (y, z)): (x, y / z)).collect()
-
         tempDist = sum(np.sum((kPoints[x] - y) ** 2) for (x, y) in newPoints)
-
         for (x, y) in newPoints:
             kPoints[x] = y
     return kPoints
@@ -150,10 +149,10 @@ def getCoresets(iterator):
     #PBsum1 = PBsum.value
     #PBsum2 = PcostBC.value
     #print((PBsum1,PBsum2))
-    print((len(Bc[0]),len(m),len(Pind)))
+    #print((len(Bc[0]),len(m),len(Pind)))
     #t = tfactor*np.sum(m)/PBsum
     t = tfactorBC.value*np.sum(m)/PcostBC.value
-    print (t,np.ceil(t).astype(int))
+    #print (t,np.ceil(t).astype(int))
     #t = tfactor*c/PBsum #tfactor*Bc[0][1]/PBsum
     #m = [closestPoint(p,Bc[0])[1] for p in pts]
     #select
@@ -162,7 +161,7 @@ def getCoresets(iterator):
        q = weighted_pick(m) #with replacement, oh well shouldnt matter for large
        Sind.append(q) #change this to a set to begin with??
        #single
-       print m[q]
+       #print m[q]
        wS.append(PcostBC.value/(tfactorBC.value*m[q]))
     #vectorized
     #w = PcostBC.value/(tfactorBC.value*m[Sind])
@@ -175,7 +174,7 @@ def getCoresets(iterator):
     #Pind = [if closestPoint(p,B)[0]==m[p]]
     #calculate the number closest, subtract the number of points that appear in S
     #loop over points: add to Pb belonging to it and subtract w if index in Sind
-    print wS
+    #print wS
     wb = np.zeros(coresetK.value)
     for pnum, p in enumerate(Pind):
         wb[p] += 1
@@ -183,9 +182,9 @@ def getCoresets(iterator):
             #wts[p] = wts[p] - w[pnum] #set
         if pnum in Sind:
             Sloc = Sind.index(pnum)
-            print wb[p]
+            #print wb[p]
             wb[p] = wb[p] - wS[Sloc]
-            print wb[p]
+            #print wb[p]
     yield (Sind,np.asarray(wS),wb) #combine outside this function in a final map with access to points?
 
 def getCoresetStreaming(iterator,PBsum,tfactor):
@@ -197,10 +196,10 @@ def getCoresetStreaming(iterator,PBsum,tfactor):
         B = b[0]
         m = b[1]
     Sind = []
-    print((len(Bc[0]),len(B),len(m)))
+    #print((len(Bc[0]),len(B),len(m)))
     PBsum1 = PBsum.value
     PBsum2 = PcostBC.value
-    print((PBsum1,PBsum2))
+    #print((PBsum1,PBsum2))
     t = tfactor*np.sum(m)/PBsum
     #t = tfactor*c/PBsum #tfactor*Bc[0][1]/PBsum
     #m = [closestPoint(p,Bc[0])[1] for p in pts]
@@ -236,10 +235,21 @@ def getPointsInS(iterator):
     S = []
     for i in inds:
         S.append(pts[i])
-    print inds
-    print S
+    #print inds
+    #print S
     yield S
- 
+
+def getClusterError(tst,trth):
+    erTot = 0
+    # for p in np.arange(tst.shape[0]):
+    #     cl = tst[p,:]
+    for p in range(len(tst)):
+        cl = tst[p]
+        el = cl - trth
+        cstl = np.amin(np.sum(el**2,axis=1),axis=0)
+        erTot += cstl
+    return erTot
+
 if __name__ == "__main__":
     if len(sys.argv) < 4:
         print >> sys.stderr, "Usage: kmeans <file> <k> <convergeDist> <n(optional)>"
@@ -249,7 +259,7 @@ if __name__ == "__main__":
     #data = lines.map(parseVector).cache()
     K = int(sys.argv[2])
     convergeDist = float(sys.argv[3])
-    t=50 #argument?? 6? roughly kd = 6*4 for bad approximation
+    t=700 #argument?? 6? roughly kd = 6*4 for bad approximation 50 or 500-700 for 2, 500nogood 700 for 3?
     tfactorBC = sc.broadcast(t)
     if len(sys.argv) == 5:
         n = int(sys.argv[4])
@@ -265,6 +275,7 @@ if __name__ == "__main__":
     l2 = lines.repartition(n)
     data = l2.map(parseVector).cache()
     P = data
+    at1 = time.clock()
     #P.glom().collect() #to check the partitioning
     #B = P.mapPartitions(lambda x: getRandB(x,K),preservesPartitioning=True).cache()
     #Pcost = B.map(lambda (k,v): v) #doesnt work now?
@@ -301,11 +312,11 @@ if __name__ == "__main__":
     Bpts = B.map(lambda (k,v,v2): k)
     Bwithweights = Bpts.zip(S.map(lambda (idx,ws,wb): wb))
     Coresets = Swithweights.union(Bwithweights)
-    #its all there, now some formatting??
+    #its all there, but unavoidable formatting??
     CoresetsFinal = Coresets.reduce(concat) #do this earlier??
     CoresetPoints = np.vstack(np.asarray(CoresetsFinal)[0::2])
     CoresetWeights = np.hstack(np.asarray(CoresetsFinal)[1::2])
-    CoresetsFinal2 = (CoresetPoints,CoresetWeights)
+    #CoresetsFinal2 = (CoresetPoints,CoresetWeights)
     #map 2 by 2?
 
 
@@ -350,8 +361,16 @@ if __name__ == "__main__":
     #what is cost of 2 sets, cost of point and set (min cost point and any point in set)
 
     #calculate B_i for each vertex and then reduce to calculate the sum
-
-    #initialize
+    #coreset approximation
+    CWlist = []
+    for lm in range(len(CoresetPoints)):
+        CWlist.append((CoresetPoints[lm,:],CoresetWeights[lm]))
+    #dataC = sc.parallelize(CoresetPoints)
+    dataCW = sc.parallelize(CWlist)
+    kPointsApprox = kmeansApprox(dataCW,K,convergeDist)
+    at2 = time.clock()
+    #original kmenas, initialize
+    ot1 = time.clock()
     kPoints = data.takeSample(False, K, 1)
     tempDist = 1.0
 
@@ -367,5 +386,27 @@ if __name__ == "__main__":
 
         for (x, y) in newPoints:
             kPoints[x] = y
-
+    ot2 = time.clock()
+    numD = data.count()
+    numC = dataCW.count()
+    print "(Approximate) Final centers: " + str(kPointsApprox)
     print "(Original) Final centers: " + str(kPoints)
+    #verify?? first match the centers to each other
+    if sys.argv[1] == 'kmeans_data2.txt':
+        truth = np.array(([0, 0, 0, 0, 0, 0],[3, 0, 0, 4, 0, 7],[1, 3.5, 0, 0, 9.2, 0],[0, 7.2, 0, 6, 0, 0]))
+    elif sys.argv[1] == 'kmeans_data3.txt':
+        truth = np.loadtxt('kmeans_centers3.txt')
+    elif sys.argv[1] == 'kmeans_data4.txt':
+        truth = np.loadtxt('kmeans_centers4.txt')
+    elif sys.argv[1] == 'kmeans_data5.txt': #too big?
+        truth = np.loadtxt('kmeans_centers5.txt')
+    #is this a good metric, or compare output to true clustering?
+    Eapprox = getClusterError(kPointsApprox,truth)
+    Eexact = getClusterError(kPoints,truth)
+    #print str(data.count()) + ' original points, ' + str(dataCW.count()) + ' coreset points'
+    print str(numD) + ' original points, ' + str(numC) + ' coreset points'
+    print "Approximate MSE: " + str(Eapprox) + ", Original MSE: " + str(Eexact)
+    print "Approximate error per point: " + str(Eapprox/numD) + ", Original error per point: " + str(Eexact/numD)
+    print "Approximate time: " + str(at2 - at1) + ", Original time: " + str(ot2-ot1) + ", Speedup: " + str((ot2-ot1)/(at2-at1)) + "x"
+    sc.stop()
+
