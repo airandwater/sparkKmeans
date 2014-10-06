@@ -30,7 +30,7 @@ from pyspark import SparkContext
 from pyspark import rdd
 from operator import add,concat
 from itertools import chain,imap
-
+import time
 
 def parseVector(line):
     return np.array([float(x) for x in line.split(' ')])
@@ -224,10 +224,12 @@ if __name__ == "__main__":
         exit(-1)
     sc = SparkContext(appName="myPythonKMeans2")
     lines = sc.textFile(sys.argv[1])
-    data = lines.map(parseVector).cache()
+    #data = lines.map(parseVector).cache()
     K = int(sys.argv[2])
     convergeDist = float(sys.argv[3])
-    t=700 #argument?? 6? roughly kd = 6*4 for bad
+    t=700 #argument?? 6? roughly kd = 6*4 for bad 700 for 2, 200b 800 for 3? 
+    #also + nk*log(nk/delta)
+    #6*4/.1^4 = for decent? maybe what matters is epsilon/d then k/(d^3 epsilon^4)
     tfactorBC = sc.broadcast(t)
     if len(sys.argv) == 5:
         n = int(sys.argv[4])
@@ -238,18 +240,18 @@ if __name__ == "__main__":
     #combine this with takeSample(withReplacement, num) somehow??
 
 
-    #DISTRIBUTE! make rdds and generate a coreset for each one
-    #how do I determine data partitioning to compute separate B and t at each machine?
     #partition into n sections, change dynamically?
-    # #create key value to partition by unique key, but creating (key, value) pair complains about partition??
+    # #create key value to partition by unique key, but then accessing by this unique pair requires collecting the RDD
     # #data._jrdd.splits().size()
     # #some other partitionBy function besides hash??
-    # #P = data.repartition(n) #DOES NOT WORK!!! start from the source?
+    # #P = data.repartition(n) #DOES NOT WORK!!! start from the source with lines
     
     l2 = lines.repartition(n)
     data = l2.map(parseVector).cache()
+    #start timer?
+    at1 = time.clock()
     P2 = data.zipWithUniqueId()
-    P3 = P2.zip(P2.map(lambda (v,i): i % n,preservesPartitioning=True))
+    #P3 = P2.zip(P2.map(lambda (v,i): i % n,preservesPartitioning=True))
     P4 = P2.map(lambda (v,i): (i % n,i/n,v),preservesPartitioning=True)
     #P.glom().collect() #to check the partitioning
     coresetK = sc.broadcast(K) #or something besides K for number of Bs
@@ -279,13 +281,16 @@ if __name__ == "__main__":
     Pwithcenterandweights = P5.map(lambda (part,inx,p,b,cpb): ((part,b),1-wSlist[part][inx]),preservesPartitioning=True) #what about all the others?
     Bptsweights = Pwithcenterandweights.reduceByKey(add)
     Coreset = Sptsweights.union(Bptsweights.map(lambda ((part,b),wB): (Bpt[part][int(b)],wB)))
-    CoresetPoints = Coreset.map(lambda (p,w): p)
-    CoresetWeights = Coreset.map(lambda (p,w): w)
+    #CoresetPoints = Coreset.map(lambda (p,w): p)
+    #CoresetWeights = Coreset.map(lambda (p,w): w)
     
     #coreset approximation
     #kPointsApprox = kmeansApprox(Coreset,K,1)
     kPointsApprox = kmeansApprox(Coreset,K,convergeDist)
+    #end timer, start new timer?
+    at2 = time.clock()
     #original kmenas, initialize
+    ot1 = time.clock()
     kPoints = data.takeSample(False, K, 1)
     tempDist = 1.0
     while tempDist > convergeDist:
@@ -298,14 +303,31 @@ if __name__ == "__main__":
         tempDist = sum(np.sum((kPoints[x] - y) ** 2) for (x, y) in newPoints)
         for (x, y) in newPoints:
             kPoints[x] = y
+    #end timer
+    ot2 = time.clock()
+    #better way to get length besides another action?
+    numD = data.count()
+    numC = Coreset.count()
     #print output
     print "(Approximate) Final centers: " + str(kPointsApprox)
     print "(Original) Final centers: " + str(kPoints)
     #verify?? first match the centers to each other
     if sys.argv[1] == 'kmeans_data2.txt':
         truth = np.array(([0, 0, 0, 0, 0, 0],[3, 0, 0, 4, 0, 7],[1, 3.5, 0, 0, 9.2, 0],[0, 7.2, 0, 6, 0, 0]))
+    elif sys.argv[1] == 'kmeans_data3.txt':
+        truth = np.loadtxt('kmeans_centers3.txt')
+    elif sys.argv[1] == 'kmeans_data4.txt':
+        truth = np.loadtxt('kmeans_centers4.txt')
+    elif sys.argv[1] == 'kmeans_data5.txt': #too big?
+        truth = np.loadtxt('kmeans_centers5.txt')
+    #is this a good metric, or compare output to true clustering?
     Eapprox = getClusterError(kPointsApprox,truth)
     Eexact = getClusterError(kPoints,truth)
+    print str(numD) + ' original points, ' + str(numC) + ' coreset points'
+    #print str(len(Clist)) + ' original points, ~' + str(len(Bpt+t) + ' coreset points'
     print "Approximate MSE: " + str(Eapprox) + ", Original MSE: " + str(Eexact)
+    print "Approximate error per point: " + str(Eapprox/numD) + ", Original error per point: " + str(Eexact/numD)
+    print "Approximate time: " + str(at2 - at1) + ", Original time: " + str(ot2-ot1) + ", Speedup: " + str((ot2-ot1)/(at2-at1)) + "x"
+    sc.stop()
 
 
