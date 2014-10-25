@@ -240,19 +240,18 @@ if __name__ == "__main__":
     if len(sys.argv) < 4:
         print >> sys.stderr, "Usage: kmeans <file> <k> <convergeDist> <n(optional)>"
         exit(-1)
-    sc = SparkContext(appName="myPythonKMeans2")
-    lines = sc.textFile(sys.argv[1])
-    #data = lines.map(parseVector).cache()
+    sc = SparkContext(appName="myPythonKMeans3")
     K = int(sys.argv[2])
     convergeDist = float(sys.argv[3])
     t=700 #argument?? 6? roughly kd/eps^4 = 6*4 for bad, also + nk*log(nk/delta) but negligible if large d or number of points?
     #6*4/.1^4 = for decent? maybe what matters is epsilon/d then k/(d^3 epsilon^4)
     tfactorBC = sc.broadcast(t)
     if len(sys.argv) == 5:
-        n = int(sys.argv[4])
-        l2 = lines.repartition(n)
+        #n = int(sys.argv[4])
+        lines = sc.textFile(sys.argv[1], minPartitions=int(sys.argv[4]))
     else:
-        l2 = lines
+        lines = sc.textFile(sys.argv[1])
+
 
     #keep track of everything with only (partitionid,point,costToB)
     #sample nonuniformly somehow
@@ -266,7 +265,7 @@ if __name__ == "__main__":
     #how do I determine data partitioning to compute separate B and t at each machine?
     #partition into n sections, change dynamically?
     
-    data = l2.map(parseVector).cache()
+    data = lines.map(parseVector).cache()
     at1 = time.clock()
     #data.getNumPartitions()
     #data.glom().collect() #to check the partitioning
