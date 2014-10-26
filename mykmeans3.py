@@ -188,6 +188,16 @@ def getSpointsweights(partid,iterator): #(p,b,cpb)
     #OR new mapPartitions, all we need is the b so subtract weight from that one
     #COMBINE WITH THE FUNCTION getBweight???
 
+def getSpointsweightsStreaming(partid,iterator):
+    #assume something (Pcosts) is broadcast with ('partid':(Pcostsum,num))
+    #itertools.compress() instead?
+    Pthiscost = Pcosts.value[str(partid)]
+    #sampP = tfactorBC.value/PcostBC.value #only broadcast this one?
+    sampP = TPratio.value
+    for p,bind,c in iterator:
+        if np.random.uniform(0,1) < sampP*Pthiscost[0]/Pthiscost[1]:
+            yield (bind,p,1/(sampP*c))
+
 def getBweight(partid,iterator):
     p = []
     bind = []
@@ -225,6 +235,14 @@ def getBweightCorrection(partid,iterator):
 def partitionsum(iterator): 
     yield sum(iterator)
 
+def partitionsumID(partid,iterator): 
+    c = 0
+    s = 0
+    for it in iterator:
+        c+=1
+        s+=it
+    yield(str(partid), (s,c))
+
 def getClusterError(tst,trth):
     erTot = 0
     # for p in np.arange(tst.shape[0]):
@@ -245,7 +263,6 @@ if __name__ == "__main__":
     convergeDist = float(sys.argv[3])
     t=700 #argument?? 6? roughly kd/eps^4 = 6*4 for bad, also + nk*log(nk/delta) but negligible if large d or number of points?
     #6*4/.1^4 = for decent? maybe what matters is epsilon/d then k/(d^3 epsilon^4)
-    tfactorBC = sc.broadcast(t)
     if len(sys.argv) == 5:
         #n = int(sys.argv[4])
         lines = sc.textFile(sys.argv[1], minPartitions=int(sys.argv[4]))
@@ -272,15 +289,27 @@ if __name__ == "__main__":
     coresetK = sc.broadcast(K) #or something besides K for number of Bs
     
     B = data.mapPartitions(getRandBwithindspoints,preservesPartitioning=True).cache()
-    Pcostsum = B.map(lambda (p,b,cpb): cpb, preservesPartitioning=True).mapPartitions(partitionsum,preservesPartitioning=True).sum() #if partition not output above
-    #cPB_2 = P5_2.map(lambda (part,p,b,cpb): (part,cpb), preservesPartitioning=True).reduceByKey(add)
-    #Pcostsum3 = cPB_2.map(lambda (k,v): v, preservesPartitioning=True).sum() #also broadcast
-    PcostBC = sc.broadcast(Pcostsum)
-    # #same in expectation?
+    
+    # # #all in all out
+    # tfactorBC = sc.broadcast(t)
+    # Pcostsum = B.map(lambda (p,b,cpb): cpb, preservesPartitioning=True).mapPartitions(partitionsum,preservesPartitioning=True).sum() #if partition not output above
+    # #cPB_2 = P5_2.map(lambda (part,p,b,cpb): (part,cpb), preservesPartitioning=True).reduceByKey(add)
+    # #Pcostsum3 = cPB_2.map(lambda (k,v): v, preservesPartitioning=True).sum() #also broadcast
+    # PcostBC = sc.broadcast(Pcostsum)
+    # SptsBweights1 = B.mapPartitionsWithIndex(getSpointsweights,preservesPartitioning=True).cache()
+    
+    # #same in expectation, but streaming?
     # sampProb = tfactorBC*cPB_2/PcostBC
     # wS = P5_2.map(lambda (part,p,b,cpb): (p,0 if cpb==0 else (np.rand()<sampProb/num)*1/sampProb),preservesPartitioning=True)
     # Sptsweights_2 = wS.map(lambda (): (p,wS)).filter(lambda (): w > 0)
-    SptsBweights1 = B.mapPartitionsWithIndex(getSpointsweights,preservesPartitioning=True).cache()
+    Pcostvec = B.map(lambda (p,b,cpb): cpb, preservesPartitioning=True).mapPartitionsWithIndex(partitionsumID,preservesPartitioning=True)
+    Pcostsum3 = Pcostvec.map(lambda (k,(v,n)): v, preservesPartitioning=True).sum() #also broadcast
+    TPratio = sc.broadcast(t/Pcostsum3)
+    Pcdict = {x[0]:x[1] for x in Pcostvec.collect()}
+    Pcosts = sc.broadcast(Pcdict)
+    SptsBweights1 = B.mapPartitionsWithIndex(getSpointsweightsStreaming,preservesPartitioning=True).cache()
+
+    
     Bptsweights1 = B.mapPartitionsWithIndex(getBweight,preservesPartitioning=True).cache()
     #within partitions reduce by key, but problem: centers B are not equally weighted
     #recalculate? for all with cost = 0, reduce by the B index corresponding to that
