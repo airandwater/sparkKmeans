@@ -189,13 +189,17 @@ def getSpointsweights(partid,iterator): #(p,b,cpb)
     #COMBINE WITH THE FUNCTION getBweight???
 
 def getSpointsweightsStreaming(partid,iterator):
+    #select sampP*Pthiscost[0] points with weighted probabilities c/Pthiscost[0]
+    #in expectation this should be sampP points...
+    #selected any of these times 1-(1-c/Pthiscost[0])^sampP*Pthiscost[0]
     #assume something (Pcosts) is broadcast with ('partid':(Pcostsum,num))
     #itertools.compress() instead?
     Pthiscost = Pcosts.value[str(partid)]
     #sampP = tfactorBC.value/PcostBC.value #only broadcast this one?
     sampP = TPratio.value
     for p,bind,c in iterator:
-        if np.random.uniform(0,1) < sampP*Pthiscost[0]/Pthiscost[1]:
+        #if np.random.uniform(0,1) < sampP*Pthiscost[0]/Pthiscost[1]: #WRONG
+        if np.random.uniform(0,1) < (1 - (1 - c/Pthiscost)**(sampP*Pthiscost)):
             yield (bind,p,1/(sampP*c))
 
 def getBweight(partid,iterator):
@@ -236,6 +240,9 @@ def partitionsum(iterator):
     yield sum(iterator)
 
 def partitionsumID(partid,iterator): 
+    yield(str(partid), sum(iterator))
+
+def partitionsumIDcount(partid,iterator): 
     c = 0
     s = 0
     for it in iterator:
@@ -303,7 +310,8 @@ if __name__ == "__main__":
     # wS = P5_2.map(lambda (part,p,b,cpb): (p,0 if cpb==0 else (np.rand()<sampProb/num)*1/sampProb),preservesPartitioning=True)
     # Sptsweights_2 = wS.map(lambda (): (p,wS)).filter(lambda (): w > 0)
     Pcostvec = B.map(lambda (p,b,cpb): cpb, preservesPartitioning=True).mapPartitionsWithIndex(partitionsumID,preservesPartitioning=True)
-    Pcostsum3 = Pcostvec.map(lambda (k,(v,n)): v, preservesPartitioning=True).sum() #also broadcast
+    #Pcostsum3 = Pcostvec.map(lambda (k,(v,n)): v, preservesPartitioning=True).sum() #also broadcast
+    Pcostsum3 = Pcostvec.values().sum() #also broadcast
     TPratio = sc.broadcast(t/Pcostsum3)
     Pcdict = Pcostvec.collectAsMap()
     Pcosts = sc.broadcast(Pcdict)
@@ -364,6 +372,6 @@ if __name__ == "__main__":
     print "Approximate MSE: " + str(Eapprox) + ", Original MSE: " + str(Eexact)
     print "Approximate error per point: " + str(Eapprox/numD) + ", Original error per point: " + str(Eexact/numD)
     print "Approximate time: " + str(at2 - at1) + ", Original time: " + str(ot2-ot1) + ", Speedup: " + str((ot2-ot1)/(at2-at1)) + "x"
-    sc.stop()
+    #sc.stop()
 
 
