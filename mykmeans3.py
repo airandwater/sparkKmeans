@@ -129,9 +129,9 @@ def getRandBwithindspoints(iterator):
     #print np.asarray(pts)
     B = []
     Ds = []    
-    #if not pts: #dont bother filling, this should go away for large data
-    if pts:
+    #if not pts: #dont bother filling, this should not occur for any reasonable input
         #print "not empty points"
+    if pts:
         for it in range(coresetK.value):
             #print it
             #calculate distances from each point to B
@@ -305,16 +305,17 @@ if __name__ == "__main__":
     Pcostvec = B.map(lambda (p,b,cpb): cpb, preservesPartitioning=True).mapPartitionsWithIndex(partitionsumID,preservesPartitioning=True)
     Pcostsum3 = Pcostvec.map(lambda (k,(v,n)): v, preservesPartitioning=True).sum() #also broadcast
     TPratio = sc.broadcast(t/Pcostsum3)
-    Pcdict = {x[0]:x[1] for x in Pcostvec.collect()}
+    Pcdict = Pcostvec.collectAsMap()
     Pcosts = sc.broadcast(Pcdict)
     SptsBweights1 = B.mapPartitionsWithIndex(getSpointsweightsStreaming,preservesPartitioning=True).cache()
 
-    
+
     Bptsweights1 = B.mapPartitionsWithIndex(getBweight,preservesPartitioning=True).cache()
     #within partitions reduce by key, but problem: centers B are not equally weighted
     #recalculate? for all with cost = 0, reduce by the B index corresponding to that
     toCorrect = SptsBweights1.mapPartitionsWithIndex(getBweightCorrection,preservesPartitioning=True).cache()
-    Bptsweights = Bptsweights1.union(toCorrect).reduceByKey(lambda (B1,w1), (B2,w2): (B1+B2,w1+w2)).map(lambda (s,(B,w)): (B,w)).cache() #will this reduce both values?
+    #Bptsweights = Bptsweights1.union(toCorrect).reduceByKey(lambda (B1,w1), (B2,w2): (B1+B2,w1+w2)).map(lambda (s,(B,w)): (B,w)).cache() #will this reduce both values?
+    Bptsweights = Bptsweights1.union(toCorrect).reduceByKey(lambda (B1,w1), (B2,w2): (B1+B2,w1+w2)).values().cache() #will this reduce both values?
     SptsBweights = SptsBweights1.map(lambda (bind,S,w): (S,w))
     Coreset = SptsBweights.union(Bptsweights)
     #print "CORESET IS LENGTH " + str(Coreset.count())
